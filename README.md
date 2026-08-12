@@ -16,7 +16,7 @@ disk is modified.
 | --- | --- |
 | `kernels` | Does every kernel and initrd the GRUB menu points at actually exist? |
 | `uefi` | Is the bootloader entry still in the firmware, enabled, and first in `BootOrder`? |
-| `generations` | Does the menu boot the system that was last built? |
+| `generations` | Does the menu boot the system that was last built, and is any named profile abandoned? |
 | `space` | Is there room on the EFI partition for a few more generations? |
 | `integrity` | Are there traces of a past filesystem repair, or config from a bootloader you dropped? |
 | `leftovers` | Are kernels from another bootloader still taking up space? |
@@ -25,6 +25,13 @@ disk is modified.
 The `generations` check is the one that is hard to spot by hand. A rebuild can
 succeed while installing the bootloader quietly does not, leaving a machine that
 looks perfectly healthy and boots into last week's system.
+
+It also explains the boot menu. The number of entries rarely matches
+`configurationLimit`, because the default entry duplicates the newest
+generation and every named profile from `nixos-rebuild --profile-name` gets its
+own submenu and its own limit. A profile nobody has rebuilt in two months is
+flagged: it is usually an experiment that was never cleaned up, still pinning a
+system in the store and a slot in the menu.
 
 ## Usage
 

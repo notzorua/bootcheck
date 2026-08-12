@@ -220,26 +220,95 @@ func defaultSystemPath(cfg string) (string, error) {
 	return "", fmt.Errorf("the first menu entry has no init= parameter")
 }
 
-// menuEntryCount counts the entries that boot a system generation.
-// The very first entry is skipped: it duplicates the newest generation.
-func menuEntryCount(cfg string) (int, error) {
+// menuLayout is how the GRUB menu is arranged: entries for the main system
+// profile at the top level, and one submenu per named profile below.
+//
+// Named profiles come from `nixos-rebuild --profile-name NAME`. Each keeps its
+// own generations and its own configurationLimit, which is why the number of
+// menu entries can exceed the limit without anything being wrong.
+type menuLayout struct {
+	main     int            // generation entries at the top level
+	profiles map[string]int // entries per named profile
+}
+
+func (m menuLayout) profileTotal() int {
+	n := 0
+	for _, c := range m.profiles {
+		n += c
+	}
+	return n
+}
+
+func (m menuLayout) profileNames() []string {
+	names := make([]string, 0, len(m.profiles))
+	for name := range m.profiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// submenuNameRe pulls the profile name out of: submenu "NixOS - Profile 'x'"
+var submenuNameRe = regexp.MustCompile(`Profile '([^']+)'`)
+
+// readMenuLayout walks grub.cfg and counts generation entries, keeping the
+// ones inside profile submenus separate from the ones at the top level.
+//
+// The very first entry is skipped: it duplicates the newest generation and
+// exists so the machine boots without anyone touching the keyboard.
+func readMenuLayout(cfg string) (menuLayout, error) {
+	out := menuLayout{profiles: map[string]int{}}
+
 	f, err := os.Open(cfg)
 	if err != nil {
-		return 0, err
+		return out, err
 	}
 	defer f.Close()
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	n := 0
+	// Brace counting is unreliable here: grub.cfg contains shell constructs
+	// like ${boot_once} that would throw it off. Tracking the two block
+	// kinds we care about is enough.
+	var (
+		inEntry    bool
+		curProfile string
+	)
+
 	for sc.Scan() {
-		title, isEntry := menuTitle(strings.TrimSpace(sc.Text()))
-		if isEntry && strings.Contains(title, "Configuration") {
-			n++
+		line := strings.TrimSpace(sc.Text())
+
+		switch {
+		case strings.HasPrefix(line, "submenu"):
+			if m := submenuNameRe.FindStringSubmatch(line); m != nil {
+				curProfile = m[1]
+				if _, seen := out.profiles[curProfile]; !seen {
+					out.profiles[curProfile] = 0
+				}
+			}
+
+		case strings.HasPrefix(line, "menuentry"):
+			inEntry = true
+			title, isEntry := menuTitle(line)
+			if !isEntry || !strings.Contains(title, "Configuration") {
+				continue
+			}
+			if curProfile != "" {
+				out.profiles[curProfile]++
+			} else {
+				out.main++
+			}
+
+		case line == "}":
+			if inEntry {
+				inEntry = false
+			} else {
+				curProfile = ""
+			}
 		}
 	}
-	return n, sc.Err()
+	return out, sc.Err()
 }
 
 func contains(list []string, v string) bool {

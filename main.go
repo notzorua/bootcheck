@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 // env holds everything the checks need, parsed once.
 type env struct {

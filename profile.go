@@ -7,11 +7,33 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
+	"time"
 )
 
 const defaultProfilesDir = "/nix/var/nix/profiles"
 
+// systemProfilesSubdir holds profiles made with `nixos-rebuild --profile-name`.
+const systemProfilesSubdir = "system-profiles"
+
+// staleProfileAge is when a named profile starts looking abandoned rather
+// than merely unused. Two months is short enough to catch an experiment from
+// the start of the summer, long enough not to nag about one from last week.
+const staleProfileAge = 60 * 24 * time.Hour
+
 var genLinkRe = regexp.MustCompile(`^system-(\d+)-link$`)
+var namedGenLinkRe = regexp.MustCompile(`^(.+)-(\d+)-link$`)
+
+// namedProfile is a system profile other than the default one.
+type namedProfile struct {
+	name    string
+	newest  int
+	updated time.Time
+}
+
+func (p namedProfile) age() time.Duration {
+	return time.Since(p.updated)
+}
 
 // checkGenerations compares the system that was built with the one the
 // GRUB menu actually boots.
@@ -42,15 +64,14 @@ func checkGenerations(e *env) Check {
 		inMenu = abs
 	}
 
-	// Not every generation reaches the menu: configurationLimit decides
-	// how many are listed. The rest stay in the store, reachable through
-	// nixos-rebuild but not at boot time.
-	menuCount, menuErr := menuEntryCount(e.cfgPath)
+	layout, layoutErr := readMenuLayout(e.cfgPath)
+	profiles := listNamedProfiles(e.profilesDir)
 
 	withCounts := func(c Check) Check {
 		c = c.data("generations", len(nums)).data("newest", nums[len(nums)-1])
-		if menuErr == nil {
-			c = c.data("in_menu", menuCount)
+		if layoutErr == nil {
+			c = c.data("menu_entries", layout.main).
+				data("menu_profile_entries", layout.profileTotal())
 		}
 		return c
 	}
@@ -63,14 +84,50 @@ func checkGenerations(e *env) Check {
 			detail("rebooting now lands in the previous system")
 	}
 
-	summary := fmt.Sprintf("%s, menu matches the built system",
-		plural(len(nums), "generation", "generations"))
-	if menuErr == nil && menuCount > 0 && menuCount < len(nums) {
-		summary = fmt.Sprintf("%s, %d in the GRUB menu, menu matches the built system",
-			plural(len(nums), "generation", "generations"), menuCount)
+	c := withCounts(ok(name, "%s, menu matches the built system",
+		plural(len(nums), "generation", "generations")))
+	c = c.detail("newest generation: %d", nums[len(nums)-1])
+
+	// Only some generations reach the menu: configurationLimit decides how
+	// many are listed. The rest stay in the store, reachable through
+	// nixos-rebuild but not at boot time.
+	if layoutErr == nil && layout.main > 0 {
+		c = c.detail("%s in the menu, out of %d kept",
+			plural(layout.main, "entry", "entries"), len(nums))
 	}
 
-	c := withCounts(ok(name, "%s", summary)).detail("newest generation: %d", nums[len(nums)-1])
+	// Named profiles get their own submenu and their own limit, so the
+	// entry count can exceed configurationLimit without anything being wrong.
+	if layoutErr == nil && len(layout.profiles) > 0 {
+		c = c.detail("plus %s in %s: %s",
+			plural(layout.profileTotal(), "entry", "entries"),
+			plural(len(layout.profiles), "other profile", "other profiles"),
+			strings.Join(layout.profileNames(), ", "))
+	}
+
+	// A named profile nobody has touched in months is usually an experiment
+	// that was never cleaned up. It holds a system in the store and takes a
+	// slot in the boot menu.
+	var forgotten []namedProfile
+	for _, p := range profiles {
+		if p.age() > staleProfileAge {
+			forgotten = append(forgotten, p)
+		}
+	}
+	if len(forgotten) > 0 {
+		c = warn(name, "%s untouched for months",
+			plural(len(forgotten), "profile has been", "profiles have been"))
+		c = withCounts(c)
+		for _, p := range forgotten {
+			c = c.detail("%s, generation %d, last built %s",
+				p.name, p.newest, humanAge(p.age()))
+		}
+		c = c.detail("each keeps a system in the store and an entry in the boot menu")
+		c = c.detail("remove with: sudo rm %s",
+			filepath.Join(e.profilesDir, systemProfilesSubdir, "NAME*"))
+		c = c.data("stale_profiles", len(forgotten))
+		return c
+	}
 
 	// Plenty of generations is not a fault, but the partition is finite.
 	if len(nums) > 40 {
@@ -80,6 +137,58 @@ func checkGenerations(e *env) Check {
 			detail("clean up with: sudo nix-collect-garbage --delete-older-than 30d")
 	}
 	return c
+}
+
+// listNamedProfiles reads the profiles created with --profile-name.
+func listNamedProfiles(profilesDir string) []namedProfile {
+	dir := filepath.Join(profilesDir, systemProfilesSubdir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+
+	newest := map[string]int{}
+	when := map[string]time.Time{}
+
+	for _, entry := range entries {
+		m := namedGenLinkRe.FindStringSubmatch(entry.Name())
+		if m == nil {
+			continue // the bare NAME link, which points at one of these
+		}
+		n, err := strconv.Atoi(m[2])
+		if err != nil {
+			continue
+		}
+		if n <= newest[m[1]] {
+			continue
+		}
+		newest[m[1]] = n
+		if info, err := entry.Info(); err == nil {
+			when[m[1]] = info.ModTime()
+		}
+	}
+
+	out := make([]namedProfile, 0, len(newest))
+	for name, n := range newest {
+		out = append(out, namedProfile{name: name, newest: n, updated: when[name]})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	return out
+}
+
+// humanAge turns a duration into something worth reading in a report.
+func humanAge(d time.Duration) string {
+	days := int(d.Hours() / 24)
+	switch {
+	case days >= 365:
+		return fmt.Sprintf("about %s ago", plural(days/365, "year", "years"))
+	case days >= 60:
+		return fmt.Sprintf("about %s ago", plural(days/30, "month", "months"))
+	case days >= 1:
+		return fmt.Sprintf("%s ago", plural(days, "day", "days"))
+	default:
+		return "today"
+	}
 }
 
 // currentSystem resolves the profile symlink to the store path it points at.
