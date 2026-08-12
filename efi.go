@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -47,10 +48,16 @@ func checkUEFI(e *env) Check {
 
 	entries, err := readBootEntries(e.varsDir)
 	if err != nil {
+		if isPermissionProblem(err) {
+			return skip(name, "%v", err)
+		}
 		return fail(name, "%v", err)
 	}
 	order, err := readBootOrder(e.varsDir)
 	if err != nil {
+		if isPermissionProblem(err) {
+			return skip(name, "%v", err)
+		}
 		return fail(name, "%v", err)
 	}
 	if len(order) == 0 {
@@ -136,7 +143,7 @@ func readBootEntries(varsDir string) (map[uint16]bootEntry, error) {
 	names, err := os.ReadDir(varsDir)
 	if err != nil {
 		if os.IsPermission(err) {
-			return nil, fmt.Errorf("no permission to read %s, try running with sudo", varsDir)
+			return nil, fmt.Errorf("no permission to read %s: %w", varsDir, fs.ErrPermission)
 		}
 		return nil, err
 	}
@@ -171,7 +178,7 @@ func readVar(varsDir, name string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsPermission(err) {
-			return nil, fmt.Errorf("no permission to read %s, try running with sudo", path)
+			return nil, fmt.Errorf("no permission to read %s: %w", path, fs.ErrPermission)
 		}
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("variable %s not found", name)

@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 )
 
-const version = "0.6.0"
+const version = "0.6.1"
 
 // env holds everything the checks need, parsed once.
 type env struct {
@@ -55,6 +55,16 @@ func main() {
 		e.cfgPath = filepath.Join(e.bootDir, "grub", "grub.cfg")
 	}
 	e.refs, e.refsErr = parseGrubConfig(e.cfgPath)
+
+	// Almost every check reads something only root can see. Saying so once,
+	// clearly, beats five checks each reporting the same thing.
+	if needsRoot(e) {
+		fmt.Fprintln(os.Stderr, "bootcheck needs root: the EFI partition and the UEFI")
+		fmt.Fprintln(os.Stderr, "variables are not readable by a regular user.")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "    sudo bootcheck")
+		os.Exit(2)
+	}
 
 	report := buildReport(version, []Check{
 		checkKernels(e),

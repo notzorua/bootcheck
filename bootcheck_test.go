@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -334,5 +336,54 @@ func TestPlural(t *testing.T) {
 	}
 	if got := plural(7, "file", "files"); got != "7 files" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestPermissionErrorsAreRecognised(t *testing.T) {
+	_, cfg := writeConfig(t)
+	if err := os.Chmod(cfg, 0o000); err != nil {
+		t.Skip("cannot make a file unreadable here")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, permissions do not apply")
+	}
+
+	_, err := parseGrubConfig(cfg)
+	if err == nil {
+		t.Fatal("expected an error reading an unreadable file")
+	}
+	if !isPermissionProblem(err) {
+		t.Errorf("error not recognised as a permission problem: %v", err)
+	}
+}
+
+func TestMissingPermissionSkipsRatherThanFails(t *testing.T) {
+	// A check that cannot look is not a check that found trouble. Reporting
+	// a failure here would tell someone not to reboot a healthy machine.
+	e := &env{
+		bootDir: t.TempDir(),
+		cfgPath: "/nowhere/grub.cfg",
+		refsErr: fmt.Errorf("no permission to read x: %w", fs.ErrPermission),
+	}
+
+	c := checkKernels(e)
+	if c.Status != StatusSkip {
+		t.Errorf("status = %q, want skip", c.Status)
+	}
+
+	r := buildReport("test", []Check{c})
+	if r.Status == StatusFail || !r.SafeToReboot {
+		t.Error("a skipped check should not make the whole report fail")
+	}
+}
+
+func TestRealErrorsStillFail(t *testing.T) {
+	e := &env{
+		bootDir: t.TempDir(),
+		cfgPath: "/nowhere/grub.cfg",
+		refsErr: fmt.Errorf("grub.cfg is corrupt"),
+	}
+	if c := checkKernels(e); c.Status != StatusFail {
+		t.Errorf("status = %q, want fail", c.Status)
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,6 +27,9 @@ func checkKernels(e *env) Check {
 	const name = "kernels"
 
 	if e.refsErr != nil {
+		if isPermissionProblem(e.refsErr) {
+			return skip(name, "%v", e.refsErr)
+		}
 		return fail(name, "cannot read the GRUB config: %v", e.refsErr)
 	}
 	if len(e.refs) == 0 {
@@ -73,7 +77,7 @@ func parseGrubConfig(path string) ([]ref, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsPermission(err) {
-			return nil, fmt.Errorf("no permission to read %s, try running with sudo", path)
+			return nil, fmt.Errorf("no permission to read %s: %w", path, fs.ErrPermission)
 		}
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("%s not found, pass -config", path)

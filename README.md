@@ -40,7 +40,10 @@ sudo bootcheck
 ```
 
 Root is required: on most NixOS installs the EFI partition is mounted with
-`dmask=0077`, and UEFI variables are root-only too.
+`dmask=0077`, and UEFI variables are root-only too. Without it you get one
+line saying so, not a wall of failures: a check that cannot look has not
+found trouble, and saying otherwise would send someone hunting for a problem
+that is not there.
 
 When everything passes you get one line:
 
@@ -78,7 +81,7 @@ When something needs attention, only that something is printed:
 | --- | --- |
 | `0` | safe to reboot, warnings may still be present |
 | `1` | at least one check failed |
-| `2` | the report could not be written |
+| `2` | not enough permission to look, or the report could not be written |
 
 Warnings do not fail the run, so `bootcheck` can be chained after a rebuild
 without blocking on cosmetic issues.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -217,7 +218,7 @@ func listGenerations(profilesDir string) ([]int, error) {
 			return nil, fmt.Errorf("%s not found, this may not be a NixOS system", profilesDir)
 		}
 		if os.IsPermission(err) {
-			return nil, fmt.Errorf("no permission to read %s, try running with sudo", profilesDir)
+			return nil, fmt.Errorf("no permission to read %s: %w", profilesDir, fs.ErrPermission)
 		}
 		return nil, err
 	}
