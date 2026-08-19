@@ -137,3 +137,4 @@ bootloader to check.
 MIT
 
 Built for NixOS with GRUB on UEFI.
+Issues and suggestions welcome.
