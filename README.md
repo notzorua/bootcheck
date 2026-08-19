@@ -135,3 +135,5 @@ bootloader to check.
 ## License
 
 MIT
+
+Built for NixOS with GRUB on UEFI.
